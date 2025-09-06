@@ -1,31 +1,43 @@
 /**
- * LiveStream Web (MVP)
- * - Signaling: WebSocket (ws) pada /ws
- * - API Daftar live: GET /api/lives
- * - Buat live: POST /api/lives
- * WebRTC: simple peer (host <-> penonton) untuk MVP.
+ * LiveStream Web (MVP++)
+ * - Username login ringan (localStorage)
+ * - Viewer presence & counter
+ * - Moderasi kata terlarang (di server) + notifikasi sistem
+ * - Gifts dengan nominal
  */
 
 const state = {
-  me: {
-    id: Math.random().toString(36).slice(2, 10),
-    name: "user" + Math.floor(Math.random()*900 + 100)
-  },
+  me: loadUser(),
   ws: null,
-  currentSlideIndex: 0,
   slidesEl: document.getElementById("slides"),
   liveList: [],
-  peers: new Map(), // key: liveId, value: RTCPeerConnection
+  peers: new Map(), // key: liveId -> RTCPeerConnection
   roleByLive: new Map(), // "host" | "viewer"
+  joinedLive: new Set(), // liveId yang sedang ditonton (visible)
 };
 
 const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
 function $(sel, el=document) { return el.querySelector(sel); }
-function el(tag, attrs={}) {
-  const e = document.createElement(tag);
-  Object.assign(e, attrs);
-  return e;
+function el(tag, attrs={}) { const e=document.createElement(tag); Object.assign(e, attrs); return e; }
+
+function loadUser() {
+  const saved = localStorage.getItem("me");
+  if (saved) return JSON.parse(saved);
+  const me = { id: Math.random().toString(36).slice(2, 10), name: "user" + Math.floor(Math.random()*900 + 100) };
+  localStorage.setItem("me", JSON.stringify(me));
+  return me;
+}
+function setUserName(name) {
+  state.me.name = name;
+  localStorage.setItem("me", JSON.stringify(state.me));
+}
+
+async function ensureLoggedIn() {
+  if (!state.me?.name) {
+    const n = prompt("Masukkan username:");
+    if (n) setUserName(n.trim());
+  }
 }
 
 async function fetchJSON(url, opts={}) {
@@ -50,6 +62,12 @@ function connectWS() {
         state.liveList = msg.lives || [];
         renderFeed();
         break;
+      case "viewer_count":
+        updateViewerCount(msg.liveId, msg.count);
+        break;
+      case "system":
+        appendChat(msg.liveId, msg.text, true);
+        break;
       case "signal":
         await handleSignal(msg);
         break;
@@ -57,19 +75,22 @@ function connectWS() {
         appendChat(msg.liveId, `${msg.user.name}: ${msg.text}`);
         break;
       case "like":
-        appendChat(msg.liveId, `❤ ${msg.user.name} menyukai`);
+        appendLikeGift(metaEl(msg.liveId), { kind: "like", total: msg.total, user: msg.user });
         break;
       case "gift":
-        appendChat(msg.liveId, `🎁 ${msg.user.name} mengirim gift`);
+        appendLikeGift(metaEl(msg.liveId), { kind: "gift", amount: msg.amount, total: msg.total, user: msg.user });
         break;
     }
   };
   ws.onclose = () => setTimeout(connectWS, 1000);
 }
-
 function wsSend(obj) { state.ws && state.ws.readyState === 1 && state.ws.send(JSON.stringify(obj)); }
 
-// UI rendering
+function metaEl(liveId) {
+  const slide = state.slidesEl.querySelector(`.slide[data-live-id="${liveId}"]`);
+  return slide && $(".meta", slide);
+}
+
 function renderFeed() {
   const container = state.slidesEl;
   container.innerHTML = "";
@@ -91,7 +112,7 @@ function createSlide(live) {
   node.dataset.liveId = live.id;
 
   $(".title", node).textContent = live.title;
-  $(".meta", node).textContent = `${live.host.name} · ${live.viewers} menonton`;
+  $(".meta", node).textContent = `${live.host.name} · ${live.viewers || 0} menonton · ❤0 · 🎁0`;
 
   const video = $("video", node);
   const likeBtn = $(".likeBtn", node);
@@ -101,7 +122,11 @@ function createSlide(live) {
   const sendBtn = $(".sendBtn", node);
 
   likeBtn.onclick = () => wsSend({ type:"like", liveId: live.id, user: state.me });
-  giftBtn.onclick = () => wsSend({ type:"gift", liveId: live.id, user: state.me });
+  giftBtn.onclick = async () => {
+    const amount = Number(prompt("Gift amount (10/50/100)?", "10") || "10");
+    if (!amount) return;
+    wsSend({ type:"gift", liveId: live.id, user: state.me, amount });
+  };
   shareBtn.onclick = async () => {
     const url = location.origin + "/?live=" + live.id;
     if (navigator.share) await navigator.share({ title: live.title, url });
@@ -114,33 +139,71 @@ function createSlide(live) {
     input.value = "";
   };
 
-  // Autoplay viewer WebRTC saat slide muncul
-  const observer = new IntersectionObserver(async (entries) => {
-    for (const ent of entries) {
-      if (ent.isIntersecting) {
+  // Presence join/leave when visible
+  const onVisible = async (visible) => {
+    if (visible) {
+      if (!state.joinedLive.has(live.id)) {
+        state.joinedLive.add(live.id);
+        wsSend({ type:"join_live", liveId: live.id, user: state.me });
         await ensureViewerConnection(live, video);
-      } else {
+      }
+    } else {
+      if (state.joinedLive.has(live.id)) {
+        state.joinedLive.delete(live.id);
+        wsSend({ type:"leave_live", liveId: live.id, user: state.me });
         stopPeer(live.id);
       }
     }
+  };
+
+  const observer = new IntersectionObserver(async (entries) => {
+    for (const ent of entries) onVisible(ent.isIntersecting);
   }, { threshold: 0.6 });
   observer.observe(node);
 
   return node;
 }
 
-function appendChat(liveId, text) {
+function appendChat(liveId, text, system=false) {
   const slide = state.slidesEl.querySelector(`.slide[data-live-id="${liveId}"]`);
   if (!slide) return;
   const chat = $(".chat", slide);
   const bubble = el("div", { className:"m" });
   bubble.textContent = text;
+  if (system) bubble.style.opacity = "0.8";
   chat.appendChild(bubble);
   chat.scrollTop = chat.scrollHeight;
 }
 
+function updateViewerCount(liveId, count) {
+  const m = metaEl(liveId);
+  if (!m) return;
+  const parts = m.textContent.split("·");
+  // Replace viewers part (middle)
+  if (parts.length >= 1) {
+    parts[1] = ` ${count} menonton `;
+    m.textContent = parts.join("·");
+  }
+}
+
+function appendLikeGift(metaNode, { kind, amount=0, total=0, user }) {
+  if (!metaNode) return;
+  // meta format: "host · X menonton · ❤L · 🎁G"
+  const parts = metaNode.textContent.split("·").map(s => s.trim());
+  const likeIndex = parts.findIndex(p => p.startsWith("❤"));
+  const giftIndex = parts.findIndex(p => p.startsWith("🎁"));
+  if (kind === "like" && likeIndex >= 0) {
+    parts[likeIndex] = `❤${total}`;
+  }
+  if (kind === "gift" && giftIndex >= 0) {
+    parts[giftIndex] = `🎁${total}`;
+  }
+  metaNode.textContent = `${parts[0]} · ${parts[1]} · ${parts[likeIndex]} · ${parts[giftIndex]}`;
+}
+
 // Host: start live
 async function startLive() {
+  await ensureLoggedIn();
   const title = prompt("Judul live?") || `Live ${state.me.name}`;
   const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 
@@ -168,10 +231,7 @@ async function startLive() {
     if (e.candidate) wsSend({ type:"signal", action:"candidate", liveId: live.id, from: state.me.id, data: e.candidate });
   };
 
-  // Host menunggu viewer offer lalu menjawab (answer) pada handleSignal()
-
   wsSend({ type:"live:started", liveId: live.id });
-
   alert("Live dimulai. Bagikan link: " + location.origin + "/?live=" + live.id);
 }
 
@@ -185,13 +245,10 @@ async function ensureViewerConnection(live, videoEl) {
   pc.onicecandidate = (e) => {
     if (e.candidate) wsSend({ type:"signal", action:"candidate", liveId: live.id, from: state.me.id, data: e.candidate });
   };
-  pc.ontrack = (ev) => {
-    videoEl.srcObject = ev.streams[0];
-  };
+  pc.ontrack = (ev) => { videoEl.srcObject = ev.streams[0]; };
 
   const offer = await pc.createOffer({ offerToReceiveAudio:true, offerToReceiveVideo:true });
   await pc.setLocalDescription(offer);
-
   wsSend({ type:"signal", action:"offer", liveId: live.id, from: state.me.id, data: offer });
 }
 
@@ -256,19 +313,15 @@ document.getElementById("goLiveBtn").addEventListener("click", () => {
 (async function init() {
   connectWS();
   try {
-    // load awal daftar live
     const { lives } = await fetchJSON("/api/lives");
     state.liveList = lives || [];
     renderFeed();
 
-    // jika ada query live, scroll ke live tersebut
     const params = new URLSearchParams(location.search);
     const liveId = params.get("live");
     if (liveId) {
       const idx = state.liveList.findIndex(l => l.id === liveId);
-      if (idx >= 0) {
-        state.slidesEl.children[idx]?.scrollIntoView({ behavior:"smooth" });
-      }
+      if (idx >= 0) state.slidesEl.children[idx]?.scrollIntoView({ behavior:"smooth" });
     }
   } catch (e) {
     console.warn("Tidak bisa memuat daftar live:", e);
