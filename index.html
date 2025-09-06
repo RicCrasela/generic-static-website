@@ -1,18 +1,77 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>My Static Site</title>
+  <title>LiveStream Web</title>
   <link rel="stylesheet" href="assets/style.css">
+  <style>
+    /* Komponen tambahan untuk layout live-feed ala TikTok */
+    .app { height:100vh; display:flex; flex-direction:column; }
+    .topbar { display:flex; gap:14px; align-items:center; padding:10px 14px; }
+    .spacer { flex:1; }
+    .feed { position:relative; flex:1; overflow:hidden; background:#000; }
+    .slides { height:100%; width:100%; scroll-snap-type:y mandatory; overflow-y:auto; }
+    .slide { height:100%; width:100%; position:relative; scroll-snap-align:start; display:flex; align-items:center; justify-content:center; background:#000; color:#fff; }
+    video { height:100%; width:100%; object-fit:cover; background:#000; }
+    .overlay { position:absolute; left:0; right:0; bottom:0; padding:16px; background:linear-gradient(180deg, rgba(0,0,0,0) 0, rgba(0,0,0,0.65) 70%); }
+    .title { font-weight:700; font-size:18px; }
+    .meta { opacity:.85; font-size:13px; margin-top:4px; }
+    .controls { position:absolute; right:10px; bottom:90px; display:flex; flex-direction:column; gap:10px; align-items:center; }
+    .btn { background:#111827; color:#fff; border:1px solid #374151; padding:8px 12px; border-radius:12px; cursor:pointer; }
+    .cta { background:#ff0050; border:none; }
+    .chat { position:absolute; left:10px; bottom:110px; max-width:70%; font-size:13px; line-height:1.2; display:flex; flex-direction:column; gap:6px; }
+    .chat .m { background:rgba(0,0,0,.45); padding:6px 8px; border-radius:10px; }
+    .composer { position:absolute; left:10px; right:10px; bottom:12px; display:flex; gap:8px; }
+    .composer input { flex:1; padding:10px 12px; border-radius:20px; border:1px solid #374151; background:rgba(17,24,39,.75); color:#fff; }
+    .composer button { padding:10px 14px; border-radius:16px; border:none; background:#10b981; color:#fff; }
+    .badge { background:#ef4444; color:#fff; padding:2px 8px; border-radius:999px; font-size:12px; margin-left:8px; }
+    .live-badge { position:absolute; top:12px; left:12px; background:#ff0050; color:#fff; font-weight:700; padding:4px 10px; border-radius:999px; }
+    .hidden { display:none; }
+  </style>
 </head>
 <body>
-  <main>
-    <h1>Welcome to Your Static Site</h1>
-  </main>
-  <footer>
-    <p>&copy; 2025 Your Name</p>
-  </footer>
+  <div class="app">
+    <div class="topbar">
+      <strong>LiveStream</strong>
+      <span class="spacer"></span>
+      <button id="goLiveBtn" class="btn cta">Go Live</button>
+    </div>
+
+    <section class="feed">
+      <div id="slides" class="slides">
+        <!-- Slides live akan dirender via JS -->
+        <div class="slide" data-placeholder>
+          <div style="text-align:center;color:#fff;">
+            <h2>Belum ada live</h2>
+            <p>Tekan “Go Live” untuk mulai siaran, atau tunggu host lain.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <template id="slideTpl">
+    <div class="slide">
+      <span class="live-badge">LIVE</span>
+      <video playsinline webkit-playsinline autoplay muted></video>
+      <div class="controls">
+        <button class="btn likeBtn">❤</button>
+        <button class="btn giftBtn">🎁</button>
+        <button class="btn shareBtn">↗</button>
+      </div>
+      <div class="chat"></div>
+      <div class="overlay">
+        <div class="title"></div>
+        <div class="meta"></div>
+      </div>
+      <div class="composer">
+        <input type="text" placeholder="Ketik pesan..." maxlength="140"/>
+        <button class="sendBtn">Kirim</button>
+      </div>
+    </div>
+  </template>
+
   <script src="assets/script.js"></script>
 </body>
 </html>

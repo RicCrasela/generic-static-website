@@ -1,0 +1,17 @@
+{
+  "name": "livestream-server",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "NODE_ENV=development node index.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0",
+    "cors": "^2.8.5",
+    "nanoid": "^5.0.7"
+  }
+}
